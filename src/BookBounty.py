@@ -219,21 +219,20 @@ class DataHandler:
                         author = "".join(reversed(author_with_sep)).title()
                         year = item["releaseDate"][:4]
 
-                        meta_profile_id = item['author']['metadataProfileId']
+                        meta_profile_id = item["author"]["metadataProfileId"]
                         endpoint = f"{self.readarr_address}/api/v1/metadataprofile/{meta_profile_id}"
                         params = {"apikey": self.readarr_api_key}
                         response = requests.get(endpoint, params=params, timeout=self.request_timeout)
                         allowed_languages = []
                         if response.status_code == 200:
                             author_meta_profile = response.json()
-                            iso_langs = author_meta_profile["allowedLanguages"]
+                            iso_langs = author_meta_profile.get("allowedLanguages", "")
                             allowed_languages = [iso639.Lang(iso).name.lower() for iso in iso_langs.split(",") if iso639.is_language(iso)]
 
                         if allowed_languages == []:
                             self.general_logger.error(f"Readarr MetadataProfile API Error Code: {response.status_code}")
                             self.general_logger.error(f"Unable to get language from metadata profile for author: {author}\nUsing default.")
                             allowed_languages = [l.lower().strip() for l in self.selected_language.split(",")]
-
 
                         new_item = {"author": author, "book_name": title, "series": series, "checked": True, "status": "", "year": year, "allowed_languages": allowed_languages}
                         self.readarr_items.append(new_item)
