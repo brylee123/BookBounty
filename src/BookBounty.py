@@ -376,30 +376,38 @@ class DataHandler:
 
     def _link_finder(self, req_item):
         try:
-            self.general_logger.warning(f'Searching for Book: {req_item["author"]} - {req_item["book_name"]} - Allowed Languages: {",".join(req_item["allowed_languages"])}')
-            author = req_item["author"]
-            book_name = req_item["book_name"]
-
-            author_search_text = f"{author.split(' ')[-1]}" if self.search_last_name_only else author
-            book_search_text = book_name.split(":")[0] if self.search_shortened_title else book_name
-            query_text = f"{author_search_text} - {book_search_text}"
-
+            # Determine query text
+            query_text = req_item.get("custom_search", "").strip()
+            if not query_text:
+                author = req_item["author"]
+                book_name = req_item["book_name"]
+                author_search_text = self.preprocess(author.split(' ')[-1]) if self.search_last_name_only else self.preprocess(author)
+                book_search_text = self.preprocess(book_name.split(":")[0]) if self.search_shortened_title else self.preprocess(book_name)
+                query_text = f"{author_search_text} {book_search_text}"
+            else:
+                # Sanitize custom search input too
+                query_text = self.preprocess(query_text)
+    
             found_links = []
-
-            if self.search_type.lower() == "non-fiction":
+    
+            # Determine per-book search type
+            search_type = req_item.get("search_type", self.search_type)
+    
+            self.general_logger.warning(f"Searching [{search_type}] for: {query_text} - Allowed Languages: {','.join(req_item['allowed_languages'])}")
+    
+            if search_type.lower() == "non-fiction":
                 try:
                     with self.libgen_thread_lock:
                         s = LibgenSearch()
-                        results = s.search_title(book_search_text)
+                        results = s.search_title(query_text)
                         self.general_logger.warning(f"Found {len(results)} potential matches")
-
                 except Exception as e:
                     self.general_logger.error(f"Error with libgen_api search library: {str(e)}")
                     results = None
-
+    
                 for item in results:
-                    author_name_match_ratio = self.compare_author_names(item["Author"], author)
-                    book_name_match_ratio = fuzz.ratio(item["Title"], book_name)
+                    author_name_match_ratio = self.compare_author_names(item["Author"], req_item["author"])
+                    book_name_match_ratio = fuzz.ratio(item["Title"], req_item["book_name"])
                     average_match_ratio = (author_name_match_ratio + book_name_match_ratio) / 2
                     language_check = item["Language"].lower() in req_item["allowed_languages"] or self.selected_language.lower() == "all"
                     if average_match_ratio > self.minimum_match_ratio and language_check:
@@ -408,7 +416,7 @@ class DataHandler:
                         break
                 else:
                     req_item["status"] = "No Link Found"
-
+    
             else:
                 search_item = query_text.replace(" ", "+")
                 url = f"{self.libgen_address}/fiction/?q={search_item}"
@@ -416,42 +424,23 @@ class DataHandler:
                 if response.status_code == 200:
                     soup = BeautifulSoup(response.text, "html.parser")
                     table = soup.find("tbody")
-                    if table:
-                        rows = table.find_all("tr")
-                    else:
-                        rows = []
-
+                    rows = table.find_all("tr") if table else []
+    
                     for row in rows:
                         try:
                             cells = row.find_all("td")
-                            try:
-                                author_string = cells[0].get_text().strip()
-                            except:
-                                author_string = ""
-                            try:
-                                raw_title = cells[2].get_text().strip()
-                                if "\nISBN" in raw_title:
-                                    title_string = raw_title.split("\nISBN")[0]
-                                elif "\nASIN" in raw_title:
-                                    title_string = raw_title.split("\nASIN")[0]
-                                else:
-                                    title_string = raw_title
-                            except:
-                                title_string = ""
-                            try:
-                                language = cells[3].get_text().strip()
-                            except:
-                                language = "english"
-                            try:
-                                file_type = cells[4].get_text().strip().lower()
-                            except:
-                                file_type = ".epub"
+                            author_string = cells[0].get_text().strip()
+                            raw_title = cells[2].get_text().strip()
+                            title_string = raw_title.split("\n")[0]
+                            language = cells[3].get_text().strip()
+                            file_type = cells[4].get_text().strip().lower()
+    
                             file_type_check = any(ft.replace(".", "").lower() in file_type for ft in self.preferred_extensions_fiction)
                             language_check = language.lower() in req_item["allowed_languages"] or self.selected_language.lower() == "all"
-
+    
                             if file_type_check and language_check:
-                                author_name_match_ratio = self.compare_author_names(author, author_string)
-                                book_name_match_ratio = fuzz.ratio(title_string, book_search_text)
+                                author_name_match_ratio = self.compare_author_names(req_item["author"], author_string)
+                                book_name_match_ratio = fuzz.ratio(title_string, req_item["book_name"])
                                 if author_name_match_ratio >= self.minimum_match_ratio and book_name_match_ratio >= self.minimum_match_ratio:
                                     mirrors = row.find("ul", class_="record_mirrors_compact")
                                     links = mirrors.find_all("a", href=True)
@@ -461,20 +450,17 @@ class DataHandler:
                                             found_links.append(href)
                         except:
                             pass
-
+    
                     if not found_links:
                         req_item["status"] = "No Link Found"
-                    socketio.emit("libgen_update", {"status": "Success", "data": self.libgen_items, "percent_completion": self.percent_completion})
                 else:
-                    socketio.emit("libgen_update", {"status": "Error", "data": self.libgen_items, "percent_completion": self.percent_completion})
-                    self.general_logger.error("Libgen Connection Error: " + str(response.status_code) + " Data: " + response.text)
+                    self.general_logger.error(f"Libgen Connection Error: {response.status_code} {response.text}")
                     req_item["status"] = "Libgen Error"
-                    socketio.emit("libgen_update", {"status": self.libgen_status, "data": self.libgen_items, "percent_completion": self.percent_completion})
-
+    
         except Exception as e:
             self.general_logger.error(f"Error Searching libgen: {str(e)}")
             raise Exception(f"Error Searching libgen: {str(e)}")
-
+    
         finally:
             return found_links
 
