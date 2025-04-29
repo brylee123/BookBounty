@@ -126,15 +126,26 @@ save_changes_button.addEventListener("click", () => {
 
 start_libgen.addEventListener('click', function () {
     start_libgen.disabled = true;
-    var checked_indices = [];
+    var selectedBooks = [];
     var checkboxes = document.getElementsByName("readarr_item");
 
-    checkboxes.forEach(function (checkbox, index) {
+    checkboxes.forEach(function (checkbox) {
         if (checkbox.checked) {
-            checked_indices.push(index);
+            const index = checkbox.dataset.index;
+            const searchType = document.querySelector(`input[name="search-type-${index}"]:checked`)?.value || "fiction";
+            const customSearch = document.getElementById(`custom-search-${index}`)?.value.trim() || "";
+
+            selectedBooks.push({
+                index: parseInt(index),
+                search_type: searchType,
+                custom_search: customSearch
+            });
         }
     });
-    socket.emit("add_to_download_list", checked_indices);
+
+    // Now emit the full book information with search options
+    socket.emit("add_to_download_list", selectedBooks);
+
     start_libgen.disabled = false;
 });
 
@@ -170,12 +181,15 @@ socket.on("readarr_update", (response) => {
 
         var cell1 = row.insertCell(0);
         var cell2 = row.insertCell(1);
+        var cell3 = row.insertCell(2);
+        var cell4 = row.insertCell(3);
 
         var checkbox = document.createElement("input");
         checkbox.type = "checkbox";
         checkbox.className = "form-check-input";
         checkbox.id = "readarr_" + i;
         checkbox.name = "readarr_item";
+        checkbox.dataset.index = i;
         checkbox.checked = item.checked;
         checkbox.addEventListener("change", function () {
             check_if_all_true();
@@ -188,6 +202,28 @@ socket.on("readarr_update", (response) => {
 
         cell1.appendChild(checkbox);
         cell2.appendChild(label);
+
+        // Fiction/Non-Fiction radio buttons
+        var fictionButton = `
+            <div class="btn-group btn-group-sm" role="group">
+                <input type="radio" class="btn-check" name="search-type-${i}" id="fiction-${i}" value="fiction" autocomplete="off" ${item.search_type === "fiction" ? "checked" : ""}>
+                <label class="btn btn-outline-primary" for="fiction-${i}">Fiction</label>
+
+                <input type="radio" class="btn-check" name="search-type-${i}" id="nonfiction-${i}" value="non-fiction" autocomplete="off" ${item.search_type === "non-fiction" ? "checked" : ""}>
+                <label class="btn btn-outline-primary" for="nonfiction-${i}">Non-Fiction</label>
+            </div>
+        `;
+        cell3.innerHTML = fictionButton;
+
+        // Custom search input field
+        var customSearchInput = document.createElement("input");
+        customSearchInput.type = "text";
+        customSearchInput.className = "form-control form-control-sm";
+        customSearchInput.id = `custom-search-${i}`;
+        customSearchInput.placeholder = "Optional custom search";
+        customSearchInput.value = item.custom_search || "";
+
+        cell4.appendChild(customSearchInput);
     });
     select_all_checkbox.checked = all_checked;
 });
